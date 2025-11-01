@@ -1,0 +1,13 @@
+[build]
+  publish = "site"
+  functions = "netlify/functions"
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+  # XSS ve clickjacking'e karşı temel korumalar:
+  X-Frame-Options = "SAMEORIGIN"
+  X-Content-Type-Options = "nosniff"
+  Referrer-Policy = "strict-origin-when-cross-origin"
+  # Sadece kendi domaininden iframe'e izin istersen CSP de ekleyebilirsin (gelişmiş kullanım)
+  # Content-Security-Policy = "frame-ancestors https://senin-domainin.netlify.app"

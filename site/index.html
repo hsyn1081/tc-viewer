@@ -1,0 +1,323 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8" />
+  <title>TC Viewer – Güvenli Erişim</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <script src="https://components.connect.trimble.com/trimble-connect-workspace-api/index.js"></script>
+  <style>
+    html,body { height:100%; margin:0; }
+    #wrap { display:flex; height:100%; }
+    #side {
+      width: 320px; background:#0f172a; color:#e5e7eb; padding:14px; box-sizing:border-box;
+      display:flex; flex-direction:column; gap:12px;
+    }
+    #side h1 { font-size:16px; margin:0 0 4px; }
+    #side label { font-size:12px; color:#cbd5e1; }
+    #side input[type=text] {
+      width:100%; padding:8px 10px; border-radius:10px; border:1px solid #334155; background:#0b1220; color:#e5e7eb;
+    }
+    #side button {
+      padding:8px 10px; border-radius:10px; border:1px solid #475569; background:#1f2937; color:#e5e7eb; cursor:pointer;
+    }
+    #side .row { display:flex; gap:8px; align-items:center; }
+    #side small { color:#94a3b8 }
+    #log { font:12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color:#a5b4fc; white-space:pre-wrap; max-height:30vh; overflow:auto; }
+    #frameWrap { flex:1; position:relative; }
+    #tc { position:absolute; inset:0; width:100%; height:100%; border:0; background:#0b1220; }
+    .chip { background:#334155; color:#e5e7eb; padding:2px 8px; border-radius:999px; font-size:12px; }
+    .ok { color:#86efac } .warn { color:#facc15 } .err { color:#fca5a5 }
+  </style>
+</head>
+<body>
+<div id="wrap">
+  <aside id="side">
+    <h1>Assembly İşlem Paneli</h1>
+    <div>
+      <div class="row">
+        <label>Assembly Pos</label>
+        <span class="chip">Örn: C/5</span>
+      </div>
+      <input id="pos" type="text" placeholder="C/5" />
+    </div>
+    <div class="row">
+      <button id="btnFind">Bul + İzole + Boya</button>
+      <button id="btnClear">Temizle (Seçim/İzolasyon/Markup)</button>
+    </div>
+    <div>
+      <label>Durum</label>
+      <div id="status"><span class="warn">Bağlanıyor…</span></div>
+    </div>
+    <div>
+      <label>Log</label>
+      <div id="log"></div>
+    </div>
+    <div>
+      <label>İpucu</label>
+      <small>URL’nin sonuna poz yaz: <code>#C/5</code> veya <code>?pos=C/5</code> → model yüklenince otomatik çalışır.</small>
+    </div>
+  </aside>
+
+  <div id="frameWrap">
+    <iframe id="tc" title="Trimble Connect Viewer"></iframe>
+  </div>
+</div>
+
+<script>
+(async () => {
+  const $ = (sel) => document.querySelector(sel);
+  const logEl = $('#log');
+  const statusEl = $('#status');
+  const setStatus = (html) => statusEl.innerHTML = html;
+  const log = (...a) => {
+    console.log('[TC]', ...a);
+    const line = a.map(x => (typeof x === 'string' ? x : JSON.stringify(x))).join(' ');
+    logEl.textContent = line + '\n' + logEl.textContent;
+  };
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+  const steel = 'rgb(112,128,144)';
+  const ASM_KEYS = [
+    'Tekla Assembly.Assembly/Cast unit Mark',
+    'Default.ASSEMBLY_POS',
+    'Tekla Common.Assembly Position'
+  ];
+  const PART_KEYS_FALLBACK = [
+    'Default.ASSEMBLY_POS',
+    'Tekla Common.Assembly Position',
+    'Tekla Assembly.Assembly/Cast unit Mark'
+  ];
+  const REF_KEYS = [
+    'Pset_BeamCommon.Reference',
+    'Pset_ColumnCommon.Reference',
+    'Pset_PlateCommon.Reference'
+  ];
+
+  function readPosFromUrl() {
+    const u = new URL(location.href);
+    const qPos = u.searchParams.get('pos');
+    if (qPos && qPos.trim()) return decodeURIComponent(qPos.trim());
+    const hash = (location.hash || '').replace(/^#/, '');
+    if (hash && hash.trim()) return decodeURIComponent(hash.trim());
+    const segs = location.pathname.split('/').filter(Boolean);
+    const tail = segs[segs.length - 1] || '';
+    if (tail && !/\.html?$/i.test(tail)) return decodeURIComponent(tail);
+    return '';
+  }
+  function writePosToUrl(pos) {
+    const base = location.pathname + location.search;
+    const newUrl = base + '#' + encodeURIComponent(pos);
+    history.replaceState(null, '', newUrl);
+  }
+
+  // 1) Server’dan güvenli config çek
+  setStatus('<span class="warn">Sunucudan config alınıyor…</span>');
+  let cfg;
+  try {
+    // Not: Netlify Functions yolu
+    const res = await fetch('/.netlify/functions/config', {
+      method: 'GET',
+      // Eğer Identity kullanırsan:
+      // headers: { Authorization: 'Bearer ' + (await netlifyIdentity.currentUser().jwt()) }
+    });
+    if (!res.ok) throw new Error('config ' + res.status);
+    cfg = await res.json();
+  } catch (e) {
+    setStatus('<span class="err">Config alınamadı</span>');
+    log('config error:', e.message || e);
+    return;
+  }
+
+  // 2) Viewer’ı başlat (tokenlar sadece backend’ten)
+  const { getConnectEmbedUrl, connect } = TrimbleConnectWorkspace;
+  const iframe = $('#tc');
+  iframe.src = getConnectEmbedUrl('prod');
+
+  let suppressSelectionHandler = false;
+
+  const ws = await connect(iframe, (evt, payload) => {
+    // tıklamada tek markup bırak
+    if (evt === 'viewer.onSelectionChanged' && !suppressSelectionHandler) {
+      handleUserPick().catch(e => log('pick error', e.message || e));
+    }
+  });
+
+  await ws.embed.setTokens({ shareToken: cfg.stoken });
+  await ws.embed.init3DViewer({ projectId: cfg.projectId, modelId: cfg.modelId });
+
+  setStatus('<span class="ok">Viewer hazır</span>');
+
+  const toNum = (x) => Number(x);
+
+  async function getSelectionPairs() {
+    const selectedSets = await ws.viewer.getSelection();
+    return selectedSets.flatMap(s =>
+      (s.objectRuntimeIds || []).map(rid => ({ modelId: s.modelId, rid: toNum(rid) }))
+    );
+  }
+
+  function flattenHierarchy(arr, out = [], defMid) {
+    for (const n of (arr || [])) {
+      const mid = n.fileId || defMid;
+      if (typeof n?.id === 'number') out.push({ modelId: mid, rid: Number(n.id) });
+      if (n?.children?.length) flattenHierarchy(n.children, out, mid);
+    }
+    return out;
+  }
+
+  async function isolateChosenAndParts(chosen, childPairs) {
+    const all = [{ modelId: chosen.modelId, rid: chosen.rid }, ...childPairs];
+    const byModel = new Map();
+    for (const { modelId, rid } of all) {
+      if (!byModel.has(modelId)) byModel.set(modelId, new Set());
+      byModel.get(modelId).add(Number(rid));
+    }
+    const payload = [...byModel.entries()].map(([mid, set]) => ({ modelId: mid, entityIds: [...set] }));
+    await ws.viewer.isolateEntities(payload);
+  }
+
+  async function colorParts(pairs, colorCss) {
+    if (!pairs.length) return;
+    const byModel = pairs.reduce((m, {modelId, rid}) => ((m[modelId] ??= []).push(rid), m), {});
+    const mo = Object.entries(byModel).map(([mid, rids]) => ({ modelId: mid, objectRuntimeIds: rids }));
+    await ws.viewer.setObjectState({ modelObjectIds: mo }, { color: colorCss, opacity: 1, visible: true });
+  }
+
+  async function removeAllTextMarkups() {
+    try {
+      const existing = await ws.markup.getTextMarkups().catch(()=>[]);
+      if (existing?.length) await ws.markup.removeMarkups(existing.map(m => m.id));
+    } catch {}
+  }
+
+  async function clearIsolationAndSelectionAndMarkups() {
+    try { await ws.viewer.isolateEntities([]); } catch {}
+    try { await ws.viewer.setSelection(undefined, 'clear'); } catch {}
+    await removeAllTextMarkups();
+    setStatus('<span class="ok">Temizlendi</span>');
+  }
+
+  async function handleUserPick() {
+    const sets = await ws.viewer.getSelection();
+    const total = sets.reduce((n, s) => n + (s.objectRuntimeIds?.length || 0), 0);
+    if (total !== 1) return;
+
+    await removeAllTextMarkups();
+
+    const mid = sets[0].modelId;
+    const rid = Number(sets[0].objectRuntimeIds[0]);
+
+    // Reference bul
+    let refText = null;
+    try {
+      const [p] = await ws.viewer.getObjectProperties(mid, [rid]);
+      const flat = new Map(
+        (p?.properties || []).flatMap(ps =>
+          (ps.properties || []).map(pr => [`${ps.name}.${pr.name}`, pr.value]))
+      );
+      for (const k of REF_KEYS) {
+        const v = flat.get(k);
+        if (v != null && String(v).trim() !== '') { refText = String(v); break; }
+      }
+    } catch {}
+
+    if (!refText) {
+      setStatus('<span class="warn">Reference bulunamadı</span>');
+      return;
+    }
+
+    const pts = await ws.viewer.getObjectPositions(mid, [rid]).catch(()=>[]);
+    const pos = pts?.[0]?.position || pts?.[0];
+    if (!pos || typeof pos.x !== 'number') return;
+
+    const x = pos.x * 1000, y = pos.y * 1000, z = pos.z * 1000;
+    const UP = 200;
+    const start = { positionX: x, positionY: y, positionZ: z };
+    const end   = { positionX: x, positionY: y, positionZ: z + UP };
+    const color = { r: 0.95, g: 0.95, b: 0.95, a: 1 };
+    await ws.markup.addTextMarkup([{ start, end, text: refText, color }]);
+    setStatus(`<span class="ok">Markup eklendi: ${refText}</span>`);
+  }
+
+  async function findIsolatePaint(pos) {
+    // Eski markupları temizle
+    await removeAllTextMarkups();
+
+    // Senin çalışan yöntem: setSelection -> getSelection
+    const variants = Array.from(new Set([pos, pos.replace('/', ''), pos.replace('/', ' '), pos.replace('/', '-')]));
+    let chosen = null;
+
+    for (const key of ASM_KEYS) {
+      for (const val of variants) {
+        try {
+          await ws.viewer.setSelection({ parameter:{ properties:{ [key]: [val] } } }, 'set');
+          await sleep(150);
+          const pairs = await getSelectionPairs();
+          if (pairs.length) { chosen = pairs[0]; break; }
+        } catch {}
+      }
+      if (chosen) break;
+    }
+
+    if (!chosen) {
+      setStatus('<span class="err">Eşleşme yok</span>');
+      return;
+    }
+
+    const chosenMO = [{ modelId: chosen.modelId, objectRuntimeIds: [chosen.rid] }];
+
+    // Çocukları getir
+    let nodes = [];
+    try { nodes = await ws.viewer.getHierarchyChildren(chosen.modelId, [chosen.rid], 'assembly', true); } catch {}
+    if (!nodes?.length) {
+      try { nodes = await ws.viewer.getHierarchyChildren(chosen.modelId, [chosen.rid], undefined, true); } catch {}
+    }
+    let childPairs = flattenHierarchy(nodes, [], chosen.modelId);
+
+    if (!childPairs.length) {
+      const bag = new Map();
+      for (const k of PART_KEYS_FALLBACK) {
+        const s2 = await ws.viewer.getObjects({ parameter:{ properties:{ [k]: [pos] } } }).catch(()=>[]);
+        for (const s of (s2||[])) {
+          const set = bag.get(s.modelId) || new Set();
+          (s.objectRuntimeIds||[]).forEach(r => set.add(Number(r)));
+          bag.set(s.modelId, set);
+        }
+      }
+      childPairs = [...bag.entries()].flatMap(([mid,set]) => [...set].map(rid => ({ modelId: mid, rid })));
+    }
+
+    await ws.viewer.setSelection({ modelObjectIds: chosenMO }, 'set');
+    await isolateChosenAndParts(chosen, childPairs);
+    await colorParts(childPairs, steel);
+    await ws.viewer.setObjectState({ modelObjectIds: chosenMO }, { visible:true, color: steel, opacity:1 });
+    try { await ws.viewer.setCamera({ modelObjectIds: chosenMO }, { animationTime: 0.8 }); } catch {}
+
+    setStatus(`<span class="ok">Bulundu ve izole edildi. Parça sayısı: ${childPairs.length}</span>`);
+  }
+
+  // Butonlar
+  $('#btnFind').onclick = async () => {
+    const POS = ($('#pos').value || '').trim();
+    if (!POS) { setStatus('<span class="warn">Lütfen Assembly Pos gir</span>'); return; }
+    writePosToUrl(POS);
+    await findIsolatePaint(POS);
+  };
+
+  $('#btnClear').onclick = async () => {
+    try { await ws.viewer.isolateEntities([]); } catch {}
+    try { await ws.viewer.setSelection(undefined, 'clear'); } catch {}
+    await removeAllTextMarkups();
+    setStatus('<span class="ok">Temizlendi</span>');
+  };
+
+  // Auto-run
+  const initialPos = readPosFromUrl();
+  if (initialPos) {
+    $('#pos').value = initialPos;
+    writePosToUrl(initialPos);
+    await findIsolatePaint(initialPos);
+  }
+})();
+</script>
+</body>
+</html>
