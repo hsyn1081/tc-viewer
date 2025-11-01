@@ -114,7 +114,7 @@
   let cfg;
   try {
     // Not: Netlify Functions yolu
-    const res = await fetch('/functions/config', {
+    const res = await fetch('functions/config', {
       method: 'GET',
       // Eğer Identity kullanırsan:
       // headers: { Authorization: 'Bearer ' + (await netlifyIdentity.currentUser().jwt()) }
