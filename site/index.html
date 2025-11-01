@@ -2,136 +2,96 @@
 <html lang="tr">
 <head>
   <meta charset="utf-8" />
-  <title>TC Viewer – Güvenli + Sürekli Arama</title>
+  <title>DGN ENGINEERING – TC Viewer</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <!-- Trimble Workspace API (IIFE) -->
   <script src="https://components.connect.trimble.com/trimble-connect-workspace-api/index.js"></script>
+
+  <!-- Basit engeller -->
+  <script>
+    addEventListener('contextmenu', e => e.preventDefault(), {capture:true});
+    addEventListener('keydown', e => {
+      const k=(e.key||'').toUpperCase(), cmd=e.ctrlKey||e.metaKey;
+      if (k==='F12'||e.keyCode===123) { e.preventDefault(); e.stopPropagation(); return false; }
+      if (cmd && e.shiftKey && ['I','J','C','K'].includes(k)) { e.preventDefault(); e.stopPropagation(); return false; }
+      if (cmd && ['U','S','P'].includes(k)) { e.preventDefault(); e.stopPropagation(); return false; }
+    }, {capture:true});
+  </script>
+
   <style>
-    html,body { height:100%; margin:0; }
-    #wrap { display:flex; height:100%; }
-    #side {
-      width: 320px; background:#0f172a; color:#e5e7eb; padding:14px; box-sizing:border-box;
-      display:flex; flex-direction:column; gap:12px;
-    }
-    #side h1 { font-size:16px; margin:0 0 4px; }
-    #side label { font-size:12px; color:#cbd5e1; }
-    #side input[type=text] {
-      width:100%; padding:8px 10px; border-radius:10px; border:1px solid #334155; background:#0b1220; color:#e5e7eb;
-    }
-    #side button {
-      padding:8px 10px; border-radius:10px; border:1px solid #475569; background:#1f2937; color:#e5e7eb; cursor:pointer;
-    }
-    #side .row { display:flex; gap:8px; align-items:center; }
-    #side small { color:#94a3b8 }
-    #log { font:12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color:#a5b4fc; white-space:pre-wrap; max-height:30vh; overflow:auto; }
-    #frameWrap { flex:1; position:relative; }
-    #tc { position:absolute; inset:0; width:100%; height:100%; border:0; background:#0b1220; }
-    .chip { background:#334155; color:#e5e7eb; padding:2px 8px; border-radius:999px; font-size:12px; }
-    .ok { color:#86efac } .warn { color:#facc15 } .err { color:#fca5a5 }
+    :root{ --bg:#0f172a; --bg2:#0b1220; --text:#e5e7eb; --muted:#94a3b8; }
+    html,body{height:100%;margin:0;background:var(--bg2);color:var(--text);font:14px system-ui,Segoe UI,Roboto,Inter,sans-serif}
+    #wrap{height:100%;display:flex;flex-direction:column}
+    #topbar{height:56px;display:flex;align-items:center;gap:14px;padding:8px 14px;background:#0f172a;border-bottom:1px solid #1f2937}
+    #brand{display:flex;align-items:center;gap:10px;min-width:240px}
+    #brand img{height:28px}
+    #brand .name{letter-spacing:.12em;font-weight:700}
+    #status{padding:4px 8px;border-radius:999px;background:#1f2937;color:#cbd5e1;font-size:12px}
+    #spacer{flex:1}
+    #logline{color:#a5b4fc;font:12px ui-monospace,Menlo,Consolas,monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    #viewerWrap{position:relative;flex:1;min-height:0}
+    #tc{position:absolute;inset:0;width:100%;height:100%;border:0;background:#0b1220}
   </style>
 </head>
 <body>
 <div id="wrap">
-  <aside id="side">
-    <h1>Assembly İşlem Paneli</h1>
-    <div>
-      <div class="row">
-        <label>Assembly Pos</label>
-        <span class="chip">Örn: C/5</span>
-      </div>
-      <input id="pos" type="text" placeholder="C/5" />
+  <header id="topbar">
+    <div id="brand">
+      <img src="https://www.dgnengineering.com/wp-content/uploads/2020/06/dsn-logo-renkli.png" alt="DGN">
+      <div class="name">DGN ENGINEERING</div>
     </div>
-    <div class="row">
-      <button id="btnFind">Bul + İzole + Boya</button>
-      <button id="btnClear">Temizle (Seçim/İzolasyon/Markup)</button>
-    </div>
-    <div>
-      <label>Durum</label>
-      <div id="status"><span class="warn">Bağlanıyor…</span></div>
-    </div>
-    <div>
-      <label>Log</label>
-      <div id="log"></div>
-    </div>
-    <div>
-      <label>İpucu</label>
-      <small>
-        URL’nin <b>sonuna</b> poz yaz: <code>#C/5</code> veya <code>?pos=C/5</code> → model yüklenince otomatik arar, eşleşene kadar dener.
-        <br/>Konsol debug için <code>?debug=1</code> ekleyebilirsin.
-      </small>
-    </div>
-  </aside>
+    <div id="status">Başlatılıyor…</div>
+    <div id="spacer"></div>
+    <div id="logline" title="Son log"></div>
+  </header>
 
-  <div id="frameWrap">
+  <div id="viewerWrap">
     <iframe id="tc" title="Trimble Connect Viewer"></iframe>
   </div>
 </div>
 
 <script>
 (async () => {
-  // ------- UTIL -------
-  const $ = (sel) => document.querySelector(sel);
-  const logEl = $('#log');
+  // -------- helpers --------
+  const $ = s => document.querySelector(s);
   const statusEl = $('#status');
-  const setStatus = (html) => statusEl.innerHTML = html;
-  const log = (...a) => {
-    console.log('[TC]', ...a);
-    const line = a.map(x => (typeof x === 'string' ? x : JSON.stringify(x))).join(' ');
-    logEl.textContent = line + '\n' + logEl.textContent;
-  };
-  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-  const steel = 'rgb(112,128,144)'; // çelik grisi
+  const loglineEl = $('#logline');
+  const setStatus = t => statusEl.textContent = t;
+  const log = (...a) => { const m=a.map(x=>typeof x==='string'?x:JSON.stringify(x)).join(' '); console.log('[TC]',...a); loglineEl.textContent=m; };
+  const sleep = ms => new Promise(r=>setTimeout(r,ms));
+  const steel = 'rgb(112,128,144)';
 
   const u = new URL(location.href);
   const debug = u.searchParams.get('debug') === '1';
 
-  // Property anahtarları
-  const ASM_KEYS = [
-    'Tekla Assembly.Assembly/Cast unit Mark',
-    'Default.ASSEMBLY_POS',
-    'Tekla Common.Assembly Position'
-  ];
-  const PART_KEYS_FALLBACK = [
-    'Default.ASSEMBLY_POS',
-    'Tekla Common.Assembly Position',
-    'Tekla Assembly.Assembly/Cast unit Mark'
-  ];
-  const REF_KEYS = [
-    'Pset_BeamCommon.Reference',
-    'Pset_ColumnCommon.Reference',
-    'Pset_PlateCommon.Reference'
-  ];
-
-  function readPosFromUrl() {
+  // POS sadece URL'den
+  function readPos() {
     const qPos = u.searchParams.get('pos');
     if (qPos && qPos.trim()) return decodeURIComponent(qPos.trim());
-    const hash = (location.hash || '').replace(/^#/, '');
-    if (hash && hash.trim()) return decodeURIComponent(hash.trim());
-    const segs = location.pathname.split('/').filter(Boolean);
-    const tail = segs[segs.length - 1] || '';
-    if (tail && !/\.html?$/i.test(tail)) return decodeURIComponent(tail);
+    const h=(location.hash||'').replace(/^#/, '');
+    if (h && h.trim()) return decodeURIComponent(h.trim());
     return '';
   }
-  function writePosToUrl(pos) {
+  function writePosToUrl(pos){
     const base = location.pathname + location.search;
-    const newUrl = base + '#' + encodeURIComponent(pos);
-    history.replaceState(null, '', newUrl);
+    history.replaceState(null,'',base + '#' + encodeURIComponent(pos));
   }
 
-  // --------- Güvenli config çek ---------
-  setStatus('<span class="warn">Sunucudan config alınıyor…</span>');
+  // ---- 1) URL’den gelen projectId, modelId, stoken'ı al; /config ile doğrulat ----
+  const pid = u.searchParams.get('projectId') || '';
+  const mid = u.searchParams.get('modelId')   || '';
+  const tok = u.searchParams.get('stoken')    || '';
+  if (!pid || !mid || !tok) { setStatus('Eksik URL parametresi'); log('missing url params'); return; }
+
+  setStatus('Sunucudan doğrulama…');
   let cfg;
   try {
-    const res = await fetch('/config', { method: 'GET' });
-    if (!res.ok) throw new Error('config ' + res.status);
-    cfg = await res.json();
-  } catch (e) {
-    setStatus('<span class="err">Config alınamadı</span>');
-    log('config error:', e.message || e);
-    return;
-  }
+    const qs = new URLSearchParams({ projectId: pid, modelId: mid, stoken: tok });
+    const r = await fetch('/config?' + qs.toString(), { method: 'GET' });
+    if (!r.ok) throw new Error('config ' + r.status);
+    cfg = await r.json();
+  } catch (e) { setStatus('Config alınamadı'); log('config error:', e.message || e); return; }
 
-  // --------- Viewer başlat ---------
+  // ---- 2) Viewer aç ----
   const { getConnectEmbedUrl, connect } = TrimbleConnectWorkspace;
   const iframe = $('#tc');
   iframe.src = getConnectEmbedUrl('prod');
@@ -139,83 +99,82 @@
   let suppressSelectionHandler = false;
   let currentSearchId = 0;
 
-  const ws = await connect(iframe, (evt, payload) => {
-    if (debug) log('evt:', evt, payload?.data ?? payload);
+  const ws = await connect(iframe, (evt) => {
+    if (debug) log('evt:', evt);
     if (evt === 'viewer.onSelectionChanged' && !suppressSelectionHandler) {
       handleUserPick().catch(e => log('pick handler error', e.message || e));
     }
   });
-  if (debug) window.ws = ws; // sadece debug modda global erişim
+  if (debug) window.ws = ws;
 
   await ws.embed.setTokens({ shareToken: cfg.stoken });
   await ws.embed.init3DViewer({ projectId: cfg.projectId, modelId: cfg.modelId });
 
-  setStatus('<span class="ok">Viewer hazır</span>');
+  setStatus('Viewer hazır');
 
-  // ------- HELPERS -------
-  const toNum = (x) => Number(x);
+  // ---- seçim & izolasyon yardımcıları ----
+  const toNum = x => Number(x);
+  const ASM_KEYS = [
+    'Tekla Assembly.Assembly/Cast unit Mark',
+    'Default.ASSEMBLY_POS',
+    'Tekla Common.Assembly Position'
+  ];
+  const PART_KEYS_FALLBACK = [
+    'Default.ASSEMBLY_POS','Tekla Common.Assembly Position','Tekla Assembly.Assembly/Cast unit Mark'
+  ];
 
-  async function getSelectionPairs() {
-    const selectedSets = await ws.viewer.getSelection();
-    return selectedSets.flatMap(s =>
-      (s.objectRuntimeIds || []).map(rid => ({ modelId: s.modelId, rid: toNum(rid) }))
-    );
-  }
+  // Tıklanınca yazılacak "Reference" anahtarları (iki varyant)
+  const REF_KEYS = [
+    'Pset_BeamCommon.Reference',
+    'Pset_ColumnCommon.Reference',
+    'Pset_PlateCommon.Reference'
+  ];
 
-  function flattenHierarchy(arr, out = [], defMid) {
-    for (const n of (arr || [])) {
+  function flattenHierarchy(arr, out=[], defMid){
+    for (const n of (arr||[])) {
       const mid = n.fileId || defMid;
       if (typeof n?.id === 'number') out.push({ modelId: mid, rid: Number(n.id) });
       if (n?.children?.length) flattenHierarchy(n.children, out, mid);
     }
     return out;
   }
-
-  async function isolateChosenAndParts(chosen, childPairs) {
+  async function getSelectionPairs(){
+    const sets = await ws.viewer.getSelection();
+    return sets.flatMap(s => (s.objectRuntimeIds||[]).map(rid => ({ modelId:s.modelId, rid:toNum(rid) })));
+  }
+  async function isolateChosenAndParts(chosen, childPairs){
     const all = [{ modelId: chosen.modelId, rid: chosen.rid }, ...childPairs];
-    const byModel = new Map(); // modelId -> Set(rid)
-    for (const { modelId, rid } of all) {
-      if (!byModel.has(modelId)) byModel.set(modelId, new Set());
-      byModel.get(modelId).add(Number(rid));
-    }
-    const payload = [...byModel.entries()].map(([mid, set]) => ({ modelId: mid, entityIds: [...set] }));
+    const byModel = new Map();
+    for (const {modelId,rid} of all){ if(!byModel.has(modelId)) byModel.set(modelId,new Set()); byModel.get(modelId).add(Number(rid)); }
+    const payload = [...byModel.entries()].map(([mid,set]) => ({ modelId: mid, entityIds: [...set] }));
     await ws.viewer.isolateEntities(payload);
   }
-
-  async function colorParts(pairs, colorCss) {
-    if (!pairs.length) return;
-    const byModel = pairs.reduce((m, {modelId, rid}) => ((m[modelId] ??= []).push(rid), m), {});
-    const mo = Object.entries(byModel).map(([mid, rids]) => ({ modelId: mid, objectRuntimeIds: rids }));
-    await ws.viewer.setObjectState({ modelObjectIds: mo }, { color: colorCss, opacity: 1, visible: true });
+  async function colorParts(pairs, colorCss){
+    if(!pairs.length) return;
+    const byModel = pairs.reduce((m,{modelId,rid}) => ((m[modelId]??=[]).push(rid),m),{});
+    const mo = Object.entries(byModel).map(([mid,rids]) => ({ modelId: mid, objectRuntimeIds: rids }));
+    await ws.viewer.setObjectState({ modelObjectIds: mo }, { color: colorCss, opacity:1, visible:true });
   }
 
-  async function removeAllTextMarkups() {
+  // ---- Markup yardımcıları ----
+  async function removeAllTextMarkups(){
     try {
-      const existing = await ws.markup.getTextMarkups().catch(()=>[]);
-      if (existing?.length) await ws.markup.removeMarkups(existing.map(m => m.id));
-    } catch (e) { if (debug) log('removeAllTextMarkups error', e.message || e); }
+      const list = await ws.markup.getTextMarkups().catch(()=>[]);
+      if (list?.length) await ws.markup.removeMarkups(list.map(m => m.id));
+    } catch {}
   }
-
-  async function clearAll() {
-    currentSearchId++;
-    try { await ws.viewer.isolateEntities([]); } catch {}
-    try { await ws.viewer.setSelection(undefined, 'clear'); } catch {}
-    await removeAllTextMarkups();
-    setStatus('<span class="ok">Temizlendi</span>');
-  }
-
-  // ------- Tıklanan parçaya tek markup -------
-  async function handleUserPick() {
+  async function handleUserPick(){
     const sets = await ws.viewer.getSelection();
-    const total = sets.reduce((n, s) => n + (s.objectRuntimeIds?.length || 0), 0);
+    const total = sets.reduce((n,s)=>n+(s.objectRuntimeIds?.length||0),0);
     if (total !== 1) return;
 
+    // önce tüm eski text markupları kaldır
     await removeAllTextMarkups();
 
     const mid = sets[0].modelId;
     const rid = Number(sets[0].objectRuntimeIds[0]);
 
-    // Reference bul
+    // Reference değerini bul
     let refText = null;
     try {
       const [p] = await ws.viewer.getObjectProperties(mid, [rid]);
@@ -227,169 +186,101 @@
         const v = flat.get(k);
         if (v != null && String(v).trim() !== '') { refText = String(v); break; }
       }
-    } catch (e) {
-      if (debug) log('properties error', e.message || e);
-    }
+    } catch {}
 
-    if (!refText) {
-      setStatus('<span class="warn">Reference bulunamadı (Pset_* Common.Reference)</span>');
-      return;
-    }
+    if (!refText) { setStatus('Reference bulunamadı'); return; }
 
-    // Pozisyon (metre → mm ×1000)
+    // Parça konumu (metre → mm)
     const pts = await ws.viewer.getObjectPositions(mid, [rid]).catch(()=>[]);
     const pos = pts?.[0]?.position || pts?.[0];
-    if (!pos || typeof pos.x !== 'number') {
-      setStatus('<span class="err">Pozisyon okunamadı</span>');
-      return;
-    }
+    if (!pos || typeof pos.x !== 'number') { setStatus('Pozisyon okunamadı'); return; }
 
-    const x = pos.x * 1000, y = pos.y * 1000, z = pos.z * 1000;
-    const UP = 200;
-    const start = { positionX: x, positionY: y, positionZ: z };
-    const end   = { positionX: x, positionY: y, positionZ: z + UP };
-    const color = { r: 0.95, g: 0.95, b: 0.95, a: 1 };
+    const x = pos.x*1000, y = pos.y*1000, z = pos.z*1000;
+    const start = { positionX:x, positionY:y, positionZ:z };
+    const end   = { positionX:x, positionY:y, positionZ:z + 200 };
 
     try {
-      await ws.markup.addTextMarkup([{ start, end, text: refText, color }]);
-      setStatus(`<span class="ok">Markup eklendi: ${refText}</span>`);
-    } catch (e) {
-      setStatus(`<span class="err">Markup hatası: ${e.message || e}</span>`);
-    }
+      await ws.markup.addTextMarkup([{ start, end, text: refText, color:{ r:.95, g:.95, b:.95, a:1 } }]);
+      setStatus(`Markup eklendi: ${refText}`);
+    } catch (e) { setStatus(`Markup hatası`); }
   }
 
-  // ------- Tek denemelik seçim (setSelection→getSelection, gerekirse getObjects) -------
-  async function trySelectByPosOnce(pos) {
-    // normalize: trim + olası varyantlar
-    const raw = (pos || '').trim();
-    const variants = Array.from(new Set([
-      raw,
-      raw.replace('/', ''),
-      raw.replace('/', ' '),
-      raw.replace('/', '-')
-    ]));
-
-    for (const key of ASM_KEYS) {
-      for (const val of variants) {
-        try {
-          if (debug) log('try setSelection', key, '=', val);
-          await ws.viewer.setSelection({ parameter:{ properties:{ [key]: [val] } } }, 'set');
-          await sleep(150);
+  // ---- Tek denemelik seçim ----
+  async function trySelectByPosOnce(pos){
+    const raw=(pos||'').trim();
+    const vars=[raw, raw.replace('/',''), raw.replace('/',' '), raw.replace('/','-')];
+    for (const key of ASM_KEYS){
+      for (const val of vars){
+        try{
+          await ws.viewer.setSelection({ parameter:{ properties:{ [key]:[val] } } }, 'set');
+          await new Promise(r=>setTimeout(r,150));
           const pairs = await getSelectionPairs();
-          if (pairs.length) return { key, val, pairs, via: 'setSelection' };
-        } catch (e) {
-          if (debug) log('setSelection error', key, val, e.message || e);
-        }
-
-        try {
-          if (debug) log('try getObjects', key, '=', val);
-          const sets = await ws.viewer.getObjects({ parameter:{ properties:{ [key]: [val] } } }).catch(()=>[]);
-          const count = (sets || []).reduce((n, s) => n + (s.objectRuntimeIds?.length || 0), 0);
-          if (count > 0) {
+          if (pairs.length) return { key, val, pairs, via:'setSelection' };
+        }catch{}
+        try{
+          const sets = await ws.viewer.getObjects({ parameter:{ properties:{ [key]:[val] } } }).catch(()=>[]);
+          const count = (sets||[]).reduce((n,s)=>n+(s.objectRuntimeIds?.length||0),0);
+          if (count>0){
             const first = sets[0];
             const rid = Number(first.objectRuntimeIds[0]);
             return { key, val, pairs:[{ modelId:first.modelId, rid }], via:'getObjects' };
           }
-        } catch (e) {
-          if (debug) log('getObjects error', key, val, e.message || e);
-        }
+        }catch{}
       }
     }
     return null;
   }
 
-  // ------- Eşleşene kadar ara (iptal destekli) -------
+  // ---- Eşleşene kadar ara ----
   const SEARCH_INTERVAL_MS = 900;
-
-  async function findIsolatePaintWithRetry(pos, searchId) {
-    setStatus(`<span class="warn">Aranıyor…</span>`);
-    let tries = 0;
-
-    while (true) {
-      if (searchId !== currentSearchId) {
-        if (debug) log('Arama iptal edildi (yeni arama başladı).');
-        return false;
-      }
+  async function runForPos(pos){
+    if(!pos){ setStatus('URL’den poz yok'); return; }
+    writePosToUrl(pos);
+    setStatus('Aranıyor…');
+    suppressSelectionHandler = true;   // arama sürecinde tık handler devre dışı
+    let tries=0;
+    while(true){
       tries++;
-
       const hit = await trySelectByPosOnce(pos);
-      if (hit) {
+      if (hit){
         const chosen = hit.pairs[0];
-        const chosenMO = [{ modelId: chosen.modelId, objectRuntimeIds: [chosen.rid] }];
+        const chosenMO = [{ modelId: chosen.modelId, objectRuntimeIds:[chosen.rid] }];
 
-        // Çocukları al
-        let nodes = [];
-        try { nodes = await ws.viewer.getHierarchyChildren(chosen.modelId, [chosen.rid], 'assembly', true); } catch {}
-        if (!nodes?.length) {
-          try { nodes = await ws.viewer.getHierarchyChildren(chosen.modelId, [chosen.rid], undefined, true); } catch {}
-        }
+        let nodes=[];
+        try{ nodes = await ws.viewer.getHierarchyChildren(chosen.modelId,[chosen.rid],'assembly',true);}catch{}
+        if(!nodes?.length){ try{ nodes = await ws.viewer.getHierarchyChildren(chosen.modelId,[chosen.rid],undefined,true);}catch{} }
         let childPairs = flattenHierarchy(nodes, [], chosen.modelId);
 
-        if (!childPairs.length) {
-          // Fallback: parça taraması
+        if(!childPairs.length){
           const bag = new Map();
-          for (const k of PART_KEYS_FALLBACK) {
-            const s2 = await ws.viewer.getObjects({ parameter:{ properties:{ [k]: [pos] } } }).catch(()=>[]);
-            for (const s of (s2||[])) {
-              const set = bag.get(s.modelId) || new Set();
-              (s.objectRuntimeIds||[]).forEach(r => set.add(Number(r)));
-              bag.set(s.modelId, set);
+          for (const k of PART_KEYS_FALLBACK){
+            const s2 = await ws.viewer.getObjects({ parameter:{ properties:{ [k]:[pos] } } }).catch(()=>[]);
+            for (const s of (s2||[])){
+              const set = bag.get(s.modelId)||new Set();
+              (s.objectRuntimeIds||[]).forEach(r=>set.add(Number(r)));
+              bag.set(s.modelId,set);
             }
           }
           childPairs = [...bag.entries()].flatMap(([mid,set]) => [...set].map(rid => ({ modelId: mid, rid })));
         }
 
-        // İzole + boya + kamera
         await ws.viewer.setSelection({ modelObjectIds: chosenMO }, 'set');
         await isolateChosenAndParts(chosen, childPairs);
         await colorParts(childPairs, steel);
-        await ws.viewer.setObjectState({ modelObjectIds: chosenMO }, { visible:true, color: steel, opacity:1 });
-        try { await ws.viewer.setCamera({ modelObjectIds: chosenMO }, { animationTime: 0.8 }); } catch {}
-
-        setStatus(`<span class="ok">Bulundu (${hit.key} = "${hit.val}"), parça sayısı: ${childPairs.length}</span>`);
-        return true;
+        await ws.viewer.setObjectState({ modelObjectIds: chosenMO }, { visible:true, color:steel, opacity:1 });
+        try{ await ws.viewer.setCamera({ modelObjectIds: chosenMO }, { animationTime:0.8 }); }catch{}
+        setStatus(`Bulundu: ${hit.key}="${hit.val}", parça: ${childPairs.length}`);
+        suppressSelectionHandler = false; // kullanıcı tıklamaları artık markup üretsin
+        return;
       }
-
-      setStatus(`<span class="warn">Aranıyor…</span> <small>${tries}. deneme</small>`);
+      setStatus(`Aranıyor… (${tries}. deneme)`);
       await sleep(SEARCH_INTERVAL_MS);
     }
   }
 
-  // ------- BUTONLAR -------
-  $('#btnFind').onclick = async () => {
-    const POS = ($('#pos').value || '').trim();
-    if (!POS) { setStatus('<span class="warn">Lütfen Assembly Pos gir</span>'); return; }
-
-    writePosToUrl(POS);
-    await removeAllTextMarkups();
-    suppressSelectionHandler = true;
-
-    currentSearchId++;
-    const mySearch = currentSearchId;
-    try {
-      await findIsolatePaintWithRetry(POS, mySearch);
-    } finally {
-      if (mySearch === currentSearchId) suppressSelectionHandler = false;
-    }
-  };
-
-  $('#btnClear').onclick = () => clearAll();
-
-  // ------- AUTO-RUN: URL’de poz varsa viewer hazır olduktan sonra RETRY ile başlat -------
-  const initialPos = readPosFromUrl();
-  if (initialPos) {
-    $('#pos').value = initialPos;
-    writePosToUrl(initialPos);
-    await sleep(600); // viewer stabilize
-    suppressSelectionHandler = true;
-    currentSearchId++;
-    const mySearch = currentSearchId;
-    try {
-      await findIsolatePaintWithRetry(initialPos, mySearch);
-    } finally {
-      if (mySearch === currentSearchId) suppressSelectionHandler = false;
-    }
-  }
+  await sleep(600);
+  await runForPos(readPos());
+  addEventListener('hashchange', () => runForPos(readPos()));
 })();
 </script>
 </body>
