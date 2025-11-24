@@ -117,10 +117,11 @@
   const ASM_KEYS = [
     'Tekla Assembly.Assembly/Cast unit Mark',
     'Default.ASSEMBLY_POS',
-    'Tekla Common.Assembly Position'
+    'Tekla Common.Assembly Position',
+    'AISC_EM 11_Pset_Assembly Identification.Assembly Mark'
   ];
   const PART_KEYS_FALLBACK = [
-    'Default.ASSEMBLY_POS','Tekla Common.Assembly Position','Tekla Assembly.Assembly/Cast unit Mark'
+    'Default.ASSEMBLY_POS','Tekla Common.Assembly Position','Tekla Assembly.Assembly/Cast unit Mark','AISC_EM 11_Pset_Assembly Identification.Assembly Mark'
   ];
 
   // Tıklanınca yazılacak "Reference" anahtarları (iki varyant)
@@ -128,7 +129,8 @@
     'Pset_BeamCommon.Reference',
     'Pset_ColumnCommon.Reference',
     'Pset_PlateCommon.Reference',
-    'Pset_MemberCommon.Reference'
+    'Pset_MemberCommon.Reference',
+    'AISC_EM 11_Pset_Piece Identification.Indication Mark'
   ];
 
   function flattenHierarchy(arr, out=[], defMid){
